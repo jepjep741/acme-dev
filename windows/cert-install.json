@@ -1,0 +1,7 @@
+{
+  "StagingDir": "C:\\ProgramData\\vault-agent\\staging",
+  "MinValidDays": 7,
+  "Certificates": {
+    "intranet": [ "intranet.asiakas.fi:443" ]
+  }
+}

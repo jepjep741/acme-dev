@@ -1,0 +1,30 @@
+# /etc/systemd/system/acme-renew.service
+# Käyttäjä: useradd --system --home-dir /var/lib/lego --shell /usr/sbin/nologin acme
+# Oikeudet: /var/lib/lego acme:acme 0700, /var/www/acme acme:www-data 0750,
+#           /etc/acme/*.env root:acme 0640
+[Unit]
+Description=ACME-varmenteiden tilaus ja uusinta (lego)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=acme
+Group=acme
+ExecStart=/usr/local/sbin/acme-renew.sh
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lego /var/www/acme
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

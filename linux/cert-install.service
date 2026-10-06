@@ -1,0 +1,11 @@
+# /etc/systemd/system/cert-install.service
+# Ainoa root-oikeuksin ajettava osa. Tarkistaa, asentaa ja lataa palvelun.
+[Unit]
+Description=Varmenteiden tarkistus ja asennus
+After=vault-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/install-cert.sh
+PrivateTmp=yes
+ProtectHome=yes

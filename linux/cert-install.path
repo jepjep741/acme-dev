@@ -1,0 +1,11 @@
+# /etc/systemd/system/cert-install.path
+# Käynnistää asennuksen heti, kun agentti kirjoittaa staging-hakemistoon.
+[Unit]
+Description=Seuraa uusia varmenteita staging-hakemistossa
+
+[Path]
+PathChanged=/var/lib/vault-agent/staging
+Unit=cert-install.service
+
+[Install]
+WantedBy=multi-user.target

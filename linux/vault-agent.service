@@ -1,0 +1,44 @@
+# /etc/systemd/system/vault-agent.service
+# Luo ensin käyttäjä:  useradd --system --no-create-home --shell /usr/sbin/nologin vault-agent
+[Unit]
+Description=Vault Agent - varmenteiden haku (staging)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vault-agent
+Group=vault-agent
+ExecStart=/usr/bin/vault agent -config=/etc/vault-agent/agent.hcl
+Restart=on-failure
+RestartSec=30
+RuntimeDirectory=vault-agent
+StateDirectory=vault-agent
+StateDirectoryMode=0750
+UMask=0027
+
+# --- Kovennus: agentti näkee vain sen, mitä tarvitsee ---
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vault-agent
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target
