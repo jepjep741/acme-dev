@@ -118,9 +118,7 @@ in_host() { # in_host <bash-skripti>  (kontissa rootina)
 @test "systemd-yksiköt: syntaksi ja polut (systemd-analyze verify)" {
   run in_host '
     for u in /opt/acme/current/podman/systemd/*.service /opt/acme/current/podman/systemd/*.timer; do
-      # backup.sh tulee vaiheessa 5; siihen asti puuttuminen sallitaan
-      systemd-analyze verify "$u" 2>&1 | grep -v -e "Failed to put bus name" -e "not supported in containers" \
-        -e "scripts/backup.sh is not executable" || true
+      systemd-analyze verify "$u" 2>&1 | grep -v -e "Failed to put bus name" -e "not supported in containers" || true
     done; echo VERIFY-DONE'
   echo "$output"
   [ "$status" -eq 0 ]

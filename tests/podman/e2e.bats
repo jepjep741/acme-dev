@@ -234,3 +234,184 @@ setup() {
   # Pebblen varmenne ei ole järjestelmän luottama -> "tavoitettiin" (TLS), ei "ei vastaa"
   [[ "$output" == *"DVV tavoitettiin"* || "$output" == *"[OK]   DVV vastaa"* ]]
 }
+
+# ---------------------------------------------------------------- Vaihe 5: alustus ja ylläpito
+
+admin_login() { # tulostaa ylläpitäjän tokenin (vain testi)
+  # shellcheck source=podman/scripts/lib.sh
+  source "$PODMAN_DIR/scripts/lib.sh"
+  local t
+  printf '%s\n%s\n%s\n' "$ADMIN_USER" "$ADMIN_PW" "$(fresh_totp)" | { vault_login_admin t && printf '%s' "$t"; }
+}
+
+@test "vault-init: avainosat ja root-token vain PGP-salattuina tiedostossa" {
+  run python3 -c 'import sys,json;d=json.load(open(sys.argv[1]));print(sorted(d), d["unseal_shares"], d["unseal_threshold"])' "$T/keys.json"
+  [[ "$output" == *"5 3"* ]]
+  [[ "$output" != *"unseal_keys_b64'"* ]]
+  root=$(cat "$T/root-token")
+  run grep -c -F "$root" "$T/keys.json"
+  [ "$output" = "0" ]
+  [ "$(stat -c %a "$T/keys.json")" = "600" ]
+}
+
+@test "vault-init: uudelleenajo on idempotentti (init ohitetaan, configure uudelleen)" {
+  run "$PODMAN_DIR/scripts/vault-init.sh" init --pgp-keys x --out /dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"jo alustettu"* ]]
+  VAULT_ADMIN_TOKEN_FILE="$T/root-token" run "$PODMAN_DIR/scripts/vault-init.sh" configure
+  echo "$output"
+  [ "$status" -eq 0 ]
+  run vault_root read -field=max_versions secret/config </dev/null
+  [ "$output" = "10" ]
+  run vault_root policy list </dev/null
+  for p in acme-writer acme-admin onboard-admin snapshot vault-admin; do [[ "$output" == *"$p"* ]]; done
+  run vault_root list -format=json identity/mfa/method/totp </dev/null
+  [ "$(python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' <<< "$output")" = "1" ]
+}
+
+@test "ylläpitäjä: kirjautuminen salasana + TOTP onnistuu, väärä TOTP ja salasana hylätään" {
+  run bash -c "printf '%s\n%s\n%s\n' '$ADMIN_USER' '$ADMIN_PW' '$(fresh_totp)' | '$PODMAN_DIR/scripts/vault-init.sh' login-test"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"vault-admin"* && "$output" == *"onboard-admin"* ]]
+  run bash -c "printf '%s\n%s\n%s\n' '$ADMIN_USER' '$ADMIN_PW' '000000' | '$PODMAN_DIR/scripts/vault-init.sh' login-test"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"TOTP-tarkistus epäonnistui"* ]]
+  run bash -c "printf '%s\n%s\n' '$ADMIN_USER' 'väärä' | '$PODMAN_DIR/scripts/vault-init.sh' login-test"
+  [ "$status" -ne 0 ]
+}
+
+@test "ylläpitäjä ei pääse varmenteiden avaimiin eikä ilman MFA:ta saa tokenia" {
+  tok=$(admin_login)
+  [ -n "$tok" ]
+  { printf '%s\n' "$tok"; } > "$T/admin-token"; chmod 600 "$T/admin-token"
+  # shellcheck source=podman/scripts/lib.sh
+  source "$PODMAN_DIR/scripts/lib.sh"
+  run vault_tok "$tok" kv get -field=key secret/certs/web </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"permission denied"* ]]
+  run vault_tok "$tok" kv metadata get secret/certs/web </dev/null
+  [ "$status" -eq 0 ]
+  # Ensimmäinen kirjautumisvaihe ei anna tokenia ilman TOTP:tä
+  run bash -c "printf '%s' '$ADMIN_PW' | podman exec -i -e VAULT_TOKEN= acme-vault vault write -format=json auth/userpass/login/$ADMIN_USER password=-"
+  [[ "$output" == *"mfa_request_id"* ]]
+  [[ "$output" != *'"client_token": "hvs.'* ]]
+}
+
+@test "secrets.sh: vault-token idempotentti, --rotate vaihtaa ja mitätöi vanhan" {
+  old=$(podman secret inspect --showsecret --format '{{.SecretData}}' vault_token)
+  VAULT_ADMIN_TOKEN_FILE="$T/admin-token" run "$PODMAN_DIR/scripts/secrets.sh" vault-token
+  [ "$status" -eq 0 ]; [[ "$output" == *"säilytetään"* ]]
+  [ "$(podman secret inspect --showsecret --format '{{.SecretData}}' vault_token)" = "$old" ]
+  VAULT_ADMIN_TOKEN_FILE="$T/admin-token" run "$PODMAN_DIR/scripts/secrets.sh" vault-token --rotate
+  echo "$output"
+  [ "$status" -eq 0 ]; [[ "$output" == *"vanha token mitätöity"* ]]
+  new=$(podman secret inspect --showsecret --format '{{.SecretData}}' vault_token)
+  [ "$new" != "$old" ]
+  run bash -c "printf '%s\n' '$old' | podman exec -i acme-vault sh -c 'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN; vault token lookup'"
+  [ "$status" -ne 0 ]
+  # uusi token toimii legon hookissa
+  run run_lego -e RENEW_DAYS=365
+  [ "$status" -eq 0 ]
+  run "$PODMAN_DIR/scripts/secrets.sh" list
+  [[ "$output" == *vault_token* && "$output" != *"$new"* ]]
+}
+
+@test "vault-unseal: uudelleenkäynnistys sinetöi, väärä osa hylätään, 3 osaa avaa" {
+  podman restart acme-vault >/dev/null
+  wait_for 60 podman exec acme-vault sh -c 'vault status; [ $? -eq 2 ]'
+  run "$PODMAN_DIR/scripts/healthcheck.sh"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"SINETÖITY"* ]]
+  run bash -c "echo 'aGVsbG8gd29ybGQgdGhpcyBpcyBub3QgYSBrZXk=' | '$PODMAN_DIR/scripts/vault-unseal.sh'"
+  [ "$status" -ne 0 ]
+  "$PODMAN_DIR/scripts/vault-unseal.sh" --reset
+  { unseal_key 2; echo; unseal_key 3; echo; unseal_key 4; echo; } > "$T/keys3"
+  run "$PODMAN_DIR/scripts/vault-unseal.sh" < "$T/keys3"
+  rm -f "$T/keys3"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  run podman exec acme-vault vault status
+  [ "$status" -eq 0 ]
+}
+
+@test "healthcheck.sh: avattu Vault, uusinta ja varmenteet OK" {
+  run "$PODMAN_DIR/scripts/healthcheck.sh"
+  echo "$output"
+  [[ "$output" == *"Vault: avattu"* ]]
+  [[ "$output" == *"uusinta: viimeisin onnistunut"* ]]
+  [[ "$output" == *"varmenne web voimassa"* ]]
+  [[ "$output" != *KRIITTINEN* ]]
+}
+
+@test "backup.sh: snapshot, salattu lego-data, config ja tarkistussummat" {
+  run "$PODMAN_DIR/scripts/backup.sh"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  b=$(find "$T/backup" -mindepth 1 -maxdepth 1 -type d -name '20*Z' | sort | tail -1)
+  [ -s "$b/vault.snap" ]
+  [ -s "$b/lego-data.tar.gpg" ]
+  [ ! -e "$b/lego-data.tar" ]
+  tar -tf "$b/config.tar" | grep -q 'certs.conf'
+  [ "$(tar -tf "$b/config.tar" | grep -c private)" = "0" ]
+  (cd "$b" && sha256sum -c --quiet SHA256SUMS)
+  [ "$(stat -c %a "$b")" = "700" ]
+  echo "$b" > "$T/last-backup"
+}
+
+@test "restore.sh verify havaitsee muutetun varmuuskopion" {
+  b=$(cat "$T/last-backup"); cp -a "$b" "$T/tampered"
+  printf 'x' >> "$T/tampered/config.tar"
+  run "$PODMAN_DIR/scripts/restore.sh" verify "$T/tampered"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"eivät täsmää"* ]]
+  run "$PODMAN_DIR/scripts/restore.sh" vault "$T/tampered" --yes
+  [ "$status" -ne 0 ]
+}
+
+@test "palautustesti: tyhjä Vault + snapshot + alkuperäiset avainosat -> varmenteet palautuvat" {
+  b=$(cat "$T/last-backup")
+  want=$(kv_field web not_after)
+  compose stop vault >/dev/null 2>&1 3>&-
+  podman rm -f acme-vault >/dev/null
+  podman volume rm -f acme_vault-data >/dev/null
+  compose up -d vault >/dev/null 2>&1 3>&-
+  wait_for 60 podman exec acme-vault sh -c 'vault status; [ $? -eq 2 ]'
+  run podman exec acme-vault sh -c 'vault status -format=json | grep "\"initialized\": false"'
+  [ "$status" -eq 0 ]
+  run "$PODMAN_DIR/scripts/restore.sh" vault "$b" --yes
+  echo "$output"
+  [ "$status" -eq 0 ]
+  { unseal_key 0; echo; unseal_key 1; echo; unseal_key 2; echo; } | "$PODMAN_DIR/scripts/vault-unseal.sh"
+  [ "$(kv_field web not_after)" = "$want" ]
+  # palvelutoken on palautunut ja toimii
+  run run_lego -e RENEW_DAYS=365
+  [ "$status" -eq 0 ]
+}
+
+@test "palautustesti: lego-data GPG-salatusta varmuuskopiosta" {
+  b=$(cat "$T/last-backup")
+  podman volume rm -f acme_lego-data >/dev/null
+  run "$PODMAN_DIR/scripts/restore.sh" lego-data "$b" --yes
+  echo "$output"
+  [ "$status" -eq 0 ]
+  before=$(kv_version web)
+  run run_lego
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"EAB"* ]]
+  [ "$(kv_version web)" = "$before" ]
+}
+
+@test "revoke-root: root-token mitätöidään, ylläpitäjä toimii edelleen" {
+  run "$PODMAN_DIR/scripts/vault-init.sh" revoke-root </dev/null
+  [ "$status" -ne 0 ]   # ilman tokenia ja ilman TTY:tä kirjautuminen epäonnistuu
+  VAULT_ADMIN_TOKEN_FILE="$T/admin-token" run "$PODMAN_DIR/scripts/vault-init.sh" revoke-root
+  [ "$status" -ne 0 ]; [[ "$output" == *"ei ole root-token"* ]]
+  VAULT_ADMIN_TOKEN_FILE="$T/root-token" run "$PODMAN_DIR/scripts/vault-init.sh" revoke-root
+  echo "$output"
+  [ "$status" -eq 0 ]
+  run vault_root token lookup </dev/null
+  [ "$status" -ne 0 ]
+  tok=$(admin_login); [ -n "$tok" ]
+}

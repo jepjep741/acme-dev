@@ -81,7 +81,8 @@ services:
         gid: "1000"
         mode: "0400"
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=16m
+      # snapshotit (backup.sh/restore.sh) kulkevat /tmp:n kautta
+      - /tmp:rw,noexec,nosuid,size=256m
     # vault status: 0 = unsealed, 2 = sinetöity -> "unhealthy" (ei uudelleenkäynnistystä).
     healthcheck:
       test: ["CMD", "vault", "status"]
