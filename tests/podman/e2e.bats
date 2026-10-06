@@ -142,10 +142,11 @@ setup() {
   [ -n "$vip" ]
   run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
     -sk --max-time 5 https://vault:8200/v1/sys/health
-  [ "$status" -ne 0 ]
+  # Vain curlin verkkovirheet kelpaavat (6 nimi, 7 yhteys, 28 aikakatkaisu); 125 = podman-virhe
+  [[ "$status" =~ ^(6|7|28)$ ]]
   run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
     -sk --max-time 5 "https://$vip:8200/v1/sys/health"
-  [ "$status" -ne 0 ]
+  [[ "$status" =~ ^(7|28)$ ]]
 }
 
 @test "eristys: lego-kontista Vault vastaa (vertailukohta)" {
@@ -159,7 +160,8 @@ setup() {
   for c in acme-nginx acme-vault; do
     run podman run --rm --network "container:$c" --entrypoint curl "$LEGO_IMAGE_REF" \
       -s --max-time 5 -o /dev/null http://1.1.1.1/
-    [ "$status" -ne 0 ]
+    echo "$c: curl $status"
+    [[ "$status" =~ ^(7|28)$ ]]
   done
 }
 
@@ -195,4 +197,40 @@ setup() {
   [[ "$logs" != *"$EAB_HMAC"* ]]
   [[ "$logs" != *"$root"* ]]
   [[ "$logs" != *"PRIVATE KEY"* ]]
+}
+
+@test "audit-loki: ei selväkielisiä tokeneita eikä PFX-salasanaa" {
+  token=$(podman run --rm --log-driver none --secret vault_token --entrypoint cat "$LEGO_IMAGE_REF" /run/secrets/vault_token)
+  pfxpw=$(kv_field web pfx_password)
+  podman exec acme-vault test -s /vault/logs/audit.log
+  run podman exec acme-vault grep -c -F -e "$token" -e "$pfxpw" /vault/logs/audit.log
+  [ "$output" = "0" ]
+}
+
+@test "vault-audit-rotate.sh kiertää lokin, Vault jatkaa ja kirjoittaa uuteen lokiin" {
+  run "$PODMAN_DIR/scripts/vault-audit-rotate.sh"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kierretty audit.log."* ]]
+  run podman exec acme-vault sh -c 'ls /vault/logs/audit.log.*.gz | wc -l'
+  [ "$output" -ge 1 ]
+  kv_field web not_after >/dev/null
+  wait_for 10 podman exec acme-vault test -s /vault/logs/audit.log
+  run podman exec acme-vault vault status
+  [ "$status" -eq 0 ]
+}
+
+@test "egress-check.sh: nginx ja Vault estetty, lego tavoittaa ACME:n; kehitysisännän avoin internet havaitaan" {
+  ACME_ENV="$ENV_FILE" ACME_DIR="$PODMAN_DIR" ACME_COMPOSE_FILES=compose.dev.yaml \
+    EGRESS_DENY_TARGETS="https://1.1.1.1/" run "$PODMAN_DIR/scripts/egress-check.sh" --skip-host
+  echo "$output"
+  # Kehitysisännällä ei ole nftables-rajausta: legon pääsy internetiin pitää havaita viaksi.
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[VIKA] lego -> https://1.1.1.1/: kohde tavoitettiin"* ]]
+  [[ "$output" == *"[OK]   acme-nginx -> https://1.1.1.1/ estetty"* ]]
+  [[ "$output" == *"[OK]   acme-vault -> https://1.1.1.1/ estetty"* ]]
+  [[ "$output" == *"[OK]   acme-vault -> https://pebble:14000/dir estetty"* ]]
+  [[ "$output" != *"tarkistus ei ajautunut"* ]]
+  # Pebblen varmenne ei ole järjestelmän luottama -> "tavoitettiin" (TLS), ei "ei vastaa"
+  [[ "$output" == *"DVV tavoitettiin"* || "$output" == *"[OK]   DVV vastaa"* ]]
 }

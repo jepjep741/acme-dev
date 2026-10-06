@@ -1,0 +1,12 @@
+# ~acmesvc/.config/systemd/user/acme-renew.service
+# ACME-uusinta ajastettuna kertakonttina (lego). Lokit: journalctl --user -t acme-renew -t acme-deploy
+[Unit]
+Description=DVV ACME -varmenteiden tilaus ja uusinta (lego-kertakontti)
+After=acme-stack.service
+Requires=acme-stack.service
+
+[Service]
+Type=oneshot
+Environment=ACME_ENV=/etc/acme-podman/.env
+ExecStart=/opt/acme/current/podman/scripts/acme-compose.sh --profile jobs run --rm -T lego
+TimeoutStartSec=30min

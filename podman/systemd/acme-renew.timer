@@ -1,0 +1,11 @@
+# ~acmesvc/.config/systemd/user/acme-renew.timer
+[Unit]
+Description=ACME-uusinta kahdesti päivässä
+
+[Timer]
+OnCalendar=*-*-* 03,15:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

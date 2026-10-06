@@ -1,0 +1,18 @@
+# ~acmesvc/.config/systemd/user/acme-stack.service
+# Nostaa nginxin ja Vaultin palvelukäyttäjän käynnistyessä (linger => koneen käynnistyessä).
+# Vault käynnistyy SINETÖITYNÄ: unseal tehdään käsin (scripts/vault-unseal.sh).
+[Unit]
+Description=DVV ACME -keskus: nginx + Vault (rootless podman)
+Documentation=file:///opt/acme/current/docs/keskuspalvelin-podman.md
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=ACME_ENV=/etc/acme-podman/.env
+ExecStart=/opt/acme/current/podman/scripts/acme-compose.sh up -d
+ExecStop=/opt/acme/current/podman/scripts/acme-compose.sh down
+TimeoutStartSec=5min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=default.target

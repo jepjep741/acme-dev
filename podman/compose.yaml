@@ -11,6 +11,11 @@
 #   egress    bridge    lego                 AINOA verkko, jolla on reitti ulos (DVV)
 name: acme
 
+# Ei podia: kontit omissa verkkonimiavaruuksissaan ilman ryhmittelyä, jotta valvonta- ja
+# tarkistustyökalut (egress-check.sh) voivat liittyä kontin verkkoon (--network container:).
+x-podman:
+  in_pod: false
+
 x-hardening: &hardening
   read_only: true
   cap_drop: [ALL]

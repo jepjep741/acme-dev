@@ -85,6 +85,7 @@ bootstrap_vault() {
     podman exec -i acme-vault vault write sys/unseal key=- >/dev/null
   wait_for 30 podman exec acme-vault vault status || return 1
   vault_root secrets enable -path=secret -version=2 kv </dev/null
+  vault_root audit enable file file_path=/vault/logs/audit.log </dev/null
   vault_root policy write acme-writer - < "$PODMAN_DIR/vault/policies/acme-writer.hcl"
   vault_root token create -policy=acme-writer -period=768h -orphan -field=token </dev/null |
     podman secret create --replace vault_token - >/dev/null

@@ -1,0 +1,15 @@
+# /etc/systemd/system/acme-egress-nft.service  (järjestelmäyksikkö, EI käyttäjän)
+# Lataa palvelukäyttäjän egress-rajauksen (nftables, meta skuid). install-host.sh luo säännöt.
+[Unit]
+Description=DVV ACME: palvelukäyttäjän ulosmenevän liikenteen rajaus (nftables)
+After=firewalld.service nftables.service
+Before=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables/acme-egress.nft
+ExecStop=/usr/sbin/nft delete table inet acme_egress
+
+[Install]
+WantedBy=multi-user.target

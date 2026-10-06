@@ -36,6 +36,7 @@ prepare() {
     --build-arg UBI_IMAGE="$UBI_IMAGE" --build-arg LEGO_VERSION="$LEGO_VERSION" --build-arg LEGO_SHA256="$LEGO_SHA256" \
     --build-arg VAULT_VERSION="$VAULT_VERSION" --build-arg VAULT_SHA256="$VAULT_LINUX_SHA256" \
     -t "localhost/acme-lego:$LEGO_IMAGE_TAG" -f "$ROOT/podman/images/lego/Containerfile" "$ROOT/podman/images/lego" >/dev/null
+  podman image exists localhost/acme-test-rhel-host:1 || podman build -q -t localhost/acme-test-rhel-host:1 "$ROOT/tests/podman/rhel-host" >/dev/null
   podman image exists localhost/acme-test-linux-client:1 || podman build -q --build-arg UBI_IMAGE="$UBI_IMAGE" \
     -t localhost/acme-test-linux-client:1 "$ROOT/tests/podman/linux-client" >/dev/null
 }

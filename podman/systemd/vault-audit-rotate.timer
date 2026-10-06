@@ -1,0 +1,10 @@
+# ~acmesvc/.config/systemd/user/vault-audit-rotate.timer
+[Unit]
+Description=Vaultin audit-lokin kierto päivittäin
+
+[Timer]
+OnCalendar=*-*-* 00:05:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

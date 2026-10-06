@@ -1,0 +1,12 @@
+# ~acmesvc/.config/systemd/user/vault-snapshot.service
+# Raft-snapshot + lego-data + konfiguraatio varmuuskopiokohteeseen (scripts/backup.sh).
+# Token: podman secret snapshot_token (policy: snapshot). Säilytys: RETENTION_DAYS .env:ssä.
+[Unit]
+Description=Vaultin raft-snapshot ja keskuksen varmuuskopio
+After=acme-stack.service
+
+[Service]
+Type=oneshot
+Environment=ACME_ENV=/etc/acme-podman/.env
+ExecStart=/opt/acme/current/podman/scripts/backup.sh
+TimeoutStartSec=30min

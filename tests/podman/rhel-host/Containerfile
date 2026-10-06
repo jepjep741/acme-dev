@@ -1,0 +1,9 @@
+# RHEL 9 -yhteensopiva testi-isäntä install-host.sh:n ja nftables-sääntöjen testaukseen.
+# Vain testikäyttöön (rakennusympäristö). EPEL antaa podman-composen kuten tuotannossa.
+ARG BASE_IMAGE=docker.io/rockylinux/rockylinux@sha256:ed654c694190a670bb5c33f68995b862214fc96ffbdca95e07a8935ba0a3717d
+FROM ${BASE_IMAGE}
+# hadolint ignore=DL3041
+RUN dnf -y install epel-release \
+ && dnf -y install podman podman-compose nftables firewalld openssl policycoreutils-python-utils \
+      shadow-utils procps-ng \
+ && dnf clean all
