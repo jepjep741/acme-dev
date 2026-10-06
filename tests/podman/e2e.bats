@@ -137,37 +137,69 @@ setup() {
   [ ! -e "$T/client2/target/bad.pem" ]
 }
 
-@test "eristys: nginx-kontista Vault ei vastaa (nimi eikä IP)" {
-  vip=$(podman inspect acme-vault --format '{{(index .NetworkSettings.Networks "acme_vault-net").IPAddress}}')
-  [ -n "$vip" ]
-  run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
-    -sk --max-time 5 https://vault:8200/v1/sys/health
+host_ip() { ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p'; }
+
+@test "eristys: nginx-kontista Vault ei vastaa (nimi, isännän IP eikä loopback)" {
   # Vain curlin verkkovirheet kelpaavat (6 nimi, 7 yhteys, 28 aikakatkaisu); 125 = podman-virhe
+  run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
+    -sk --max-time 5 https://vault:18200/v1/sys/health
   [[ "$status" =~ ^(6|7|28)$ ]]
   run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
-    -sk --max-time 5 "https://$vip:8200/v1/sys/health"
+    -sk --max-time 5 "https://$(host_ip):18200/v1/sys/health"
   [[ "$status" =~ ^(7|28)$ ]]
+  # nginxin oma loopback ei ole isännän loopback
+  run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
+    -sk --max-time 5 https://127.0.0.1:18200/v1/sys/health
+  [[ "$status" =~ ^(7|28)$ ]]
+  # edge-verkossa ei ole oletusreittiä
+  run podman exec acme-nginx ip route
+  [[ "$output" != *default* ]]
 }
 
-@test "eristys: lego-kontista Vault vastaa (vertailukohta)" {
-  vip=$(podman inspect acme-vault --format '{{(index .NetworkSettings.Networks "acme_vault-net").IPAddress}}')
-  run podman run --rm --network acme_vault-net --entrypoint curl "$LEGO_IMAGE_REF" \
-    -sk --max-time 5 -o /dev/null -w '%{http_code}' "https://$vip:8200/v1/sys/health"
+@test "eristys: lego (isännän verkko) tavoittaa Vaultin (vertailukohta)" {
+  run podman run --rm --log-driver none --network host -v "$T/config/tls/ca.pem:/ca.pem:ro,z" \
+    --entrypoint curl "$LEGO_IMAGE_REF" \
+    -s --cacert /ca.pem --max-time 5 -o /dev/null -w '%{http_code}' https://127.0.0.1:18200/v1/sys/health
   [ "$output" = "200" ]
 }
 
-@test "eristys: nginx- ja Vault-konteilla ei ole reittiä ulos" {
-  for c in acme-nginx acme-vault; do
-    run podman run --rm --network "container:$c" --entrypoint curl "$LEGO_IMAGE_REF" \
-      -s --max-time 5 -o /dev/null http://1.1.1.1/
-    echo "$c: curl $status"
-    [[ "$status" =~ ^(7|28)$ ]]
-  done
+@test "eristys: nginx-kontilla ei ole reittiä ulos" {
+  run podman run --rm --network container:acme-nginx --entrypoint curl "$LEGO_IMAGE_REF" \
+    -s --max-time 5 -o /dev/null http://1.1.1.1/
+  echo "curl $status"
+  [[ "$status" =~ ^(7|28)$ ]]
 }
 
-@test "eristys: Vault julkaistu vain annettuun IP:hen" {
-  run podman inspect acme-vault --format '{{range $p, $b := .HostConfig.PortBindings}}{{$p}}={{range $b}}{{.HostIP}}:{{.HostPort}} {{end}}{{end}}'
-  [ "$output" = "8200/tcp=127.0.0.1:18200 " ]
+@test "Vault ja lego isännän verkossa; Vault kuuntelee vain annetussa IP:ssä" {
+  [ "$(podman inspect acme-vault --format '{{.HostConfig.NetworkMode}}')" = host ]
+  run podman inspect acme-vault --format '{{len .HostConfig.PortBindings}}'
+  [ "$output" = "0" ]
+  run curl -sk --max-time 5 -o /dev/null -w '%{http_code}' https://127.0.0.1:18200/v1/sys/health
+  [ "$output" = "200" ]
+  run curl -sk --max-time 5 -o /dev/null "https://$(host_ip):18200/v1/sys/health"
+  [ "$status" -eq 7 ]
+}
+
+@test "AppRole-CIDR-sidonta: Vault näkee asiakkaan todellisen IP:n" {
+  vault_root auth list </dev/null | grep -q '^approle/'
+  printf 'path "secret/data/certs/web" { capabilities = ["read"] }\n' | vault_root policy write cert-e2e - >/dev/null
+  for r in e2e-ok:127.0.0.1/32 e2e-wrong:10.255.255.1/32; do
+    vault_root write "auth/approle/role/${r%%:*}" token_policies=cert-e2e \
+      secret_id_bound_cidrs="${r#*:}" token_bound_cidrs="${r#*:}" </dev/null >/dev/null
+  done
+  login() { # login <rooli> -> HTTP-koodi; secret_id kulkee stdinissä (ei komentorivillä)
+    local rid sid
+    rid=$(vault_root read -field=role_id "auth/approle/role/$1/role-id" </dev/null)
+    sid=$(vault_root write -f -field=secret_id "auth/approle/role/$1/secret-id" </dev/null)
+    printf '{"role_id":"%s","secret_id":"%s"}' "$rid" "$sid" |
+      curl -s --cacert "$T/config/tls/ca.pem" -o /dev/null -w '%{http_code}' --data @- \
+        https://127.0.0.1:18200/v1/auth/approle/login
+  }
+  [ "$(login e2e-ok)" = "200" ]
+  [ "$(login e2e-wrong)" != "200" ]
+  vault_root delete auth/approle/role/e2e-ok </dev/null >/dev/null
+  vault_root delete auth/approle/role/e2e-wrong </dev/null >/dev/null
+  vault_root policy delete cert-e2e </dev/null >/dev/null
 }
 
 @test "salaisuudet eivät näy podman inspectissä (nginx, vault, lego)" {
@@ -220,16 +252,17 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "egress-check.sh: nginx ja Vault estetty, lego tavoittaa ACME:n; kehitysisännän avoin internet havaitaan" {
+@test "egress-check.sh: nginx estetty, lego tavoittaa ACME:n; kehitysisännän avoin internet havaitaan" {
   ACME_ENV="$ENV_FILE" ACME_DIR="$PODMAN_DIR" ACME_COMPOSE_FILES=compose.dev.yaml \
     EGRESS_DENY_TARGETS="https://1.1.1.1/" run "$PODMAN_DIR/scripts/egress-check.sh" --skip-host
   echo "$output"
-  # Kehitysisännällä ei ole nftables-rajausta: legon pääsy internetiin pitää havaita viaksi.
+  # Kehitysisännällä ei ole nftables-rajausta: isännän verkossa olevien legon ja Vaultin pääsy
+  # internetiin pitää havaita viaksi (tuotannossa nftables estää, ks. host.bats).
   [ "$status" -eq 1 ]
   [[ "$output" == *"[VIKA] lego -> https://1.1.1.1/: kohde tavoitettiin"* ]]
+  [[ "$output" == *"[VIKA] acme-vault -> https://1.1.1.1/: kohde tavoitettiin"* ]]
   [[ "$output" == *"[OK]   acme-nginx -> https://1.1.1.1/ estetty"* ]]
-  [[ "$output" == *"[OK]   acme-vault -> https://1.1.1.1/ estetty"* ]]
-  [[ "$output" == *"[OK]   acme-vault -> https://pebble:14000/dir estetty"* ]]
+  [[ "$output" == *"[OK]   acme-nginx -> https://127.0.0.1:14000/dir estetty"* ]]
   [[ "$output" != *"tarkistus ei ajautunut"* ]]
   # Pebblen varmenne ei ole järjestelmän luottama -> "tavoitettiin" (TLS), ei "ei vastaa"
   [[ "$output" == *"DVV tavoitettiin"* || "$output" == *"[OK]   DVV vastaa"* ]]
@@ -401,6 +434,139 @@ admin_login() { # tulostaa ylläpitäjän tokenin (vain testi)
   [ "$status" -eq 0 ]
   [[ "$output" != *"EAB"* ]]
   [ "$(kv_version web)" = "$before" ]
+}
+
+# ---------------------------------------------------------------- Vaihe 6: liittäminen
+
+onboard() { VAULT_ADMIN_TOKEN_FILE="$T/admin-token" "$PODMAN_DIR/scripts/onboard-server.sh" "$@"; }
+
+# Vault-komento "palvelimelta" (isännän verkko, lähde 127.0.0.1): token stdinin 1. rivinä
+agent_vault() {
+  podman run --rm -i --log-driver none --network host -v "$T/config/tls/ca.pem:/ca.pem:ro,z" \
+    -e VAULT_ADDR=https://127.0.0.1:18200 -e VAULT_CACERT=/ca.pem --entrypoint sh "$LEGO_IMAGE_REF" \
+    -c 'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN; exec vault "$@"' vault "$@"
+}
+
+@test "onboard-server.sh add: rooli, CIDR-sidonta ja kääre; agentti hakee bundlen ja install-cert.sh asentaa" {
+  run onboard add e2e-srv 127.0.0.1 web
+  echo "$output"
+  [ "$status" -eq 0 ]
+  rid=$(sed -n 's/^role_id: *//p' <<< "$output")
+  wrapped=$(sed -n 's/^wrapped secret_id: *\([^ ]*\).*/\1/p' <<< "$output")
+  [[ "$rid" =~ ^[0-9a-f-]{36}$ ]]
+  [ -n "$wrapped" ]
+  # Kääreen purku palvelimella (kertakäyttöinen)
+  sid=$(printf '%s\n' "$wrapped" | agent_vault unwrap -field=secret_id)
+  [ -n "$sid" ]
+  run bash -c "printf '%s\n' '$wrapped' | podman run --rm -i --log-driver none --network host -v '$T/config/tls/ca.pem:/ca.pem:ro,z' -e VAULT_ADDR=https://127.0.0.1:18200 -e VAULT_CACERT=/ca.pem --entrypoint sh '$LEGO_IMAGE_REF' -c 'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN; vault unwrap -field=secret_id'"
+  [ "$status" -ne 0 ]
+  # Vault Agent (linux/agent.hcl:n mukainen, kertaajo) renderöi bundlen staging-hakemistoon
+  mkdir -p "$T/agent/staging"; chmod 777 "$T/agent/staging"
+  printf '%s' "$rid" > "$T/agent/role_id"; printf '%s' "$sid" > "$T/agent/secret_id"; chmod 644 "$T/agent/role_id" "$T/agent/secret_id"
+  cat > "$T/agent/agent.hcl" <<'HCL'
+vault {
+  address = "https://127.0.0.1:18200"
+  ca_cert = "/ca.pem"
+}
+auto_auth {
+  method "approle" {
+    config = {
+      role_id_file_path                   = "/agent/role_id"
+      secret_id_file_path                 = "/agent/secret_id"
+      remove_secret_id_file_after_reading = false
+    }
+  }
+}
+template {
+  contents             = "{{ with secret \"secret/data/certs/web\" }}{{ .Data.data.bundle }}{{ end }}"
+  destination          = "/agent/staging/web.pem"
+  perms                = "0640"
+  error_on_missing_key = true
+}
+HCL
+  # Agentti ajetaan kuten tuotannossa (jatkuva prosessi); odotetaan renderöintiä ja pysäytetään.
+  podman run -d --name acme-e2e-agent --log-driver none --network host -v "$T/config/tls/ca.pem:/ca.pem:ro,z" \
+    -e VAULT_CACERT=/ca.pem -v "$T/agent:/agent:z" --entrypoint vault "$LEGO_IMAGE_REF" agent -config=/agent/agent.hcl >/dev/null 3>&-
+  wait_for 60 test -s "$T/agent/staging/web.pem" || { podman logs acme-e2e-agent; false; }
+  podman rm -f acme-e2e-agent >/dev/null
+  # Tiedosto on agentin (kontin uid) omistama 0640: luetaan käyttäjänimiavaruudessa
+  cmp <(kv_field web bundle) <(podman unshare cat "$T/agent/staging/web.pem")
+  # install-cert.sh asentaa agentin renderöimän bundlen (sama ketju kuin Linux-palvelimella)
+  mkdir -p "$T/agent/target"
+  run podman run --rm --network none \
+    -v "$ROOT/linux/install-cert.sh:/usr/local/sbin/install-cert.sh:ro,z" \
+    -v "$T/client/cert-install.conf:/etc/cert-install.conf:ro,z" -v "$T/client/dvv-ca.pem:/dvv-ca.pem:ro,z" \
+    -v "$T/agent/staging:/staging:ro,z" -v "$T/agent/target:/target:z" \
+    "$CLIENT_IMAGE" bash /usr/local/sbin/install-cert.sh
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"web: asennettu"* ]]
+  # Pääsy vain omaan varmenteeseen
+  tok=$(printf '{"role_id":"%s","secret_id":"%s"}' "$rid" "$sid" | curl -s --cacert "$T/config/tls/ca.pem" --data @- \
+    https://127.0.0.1:18200/v1/auth/approle/login | python3 -c 'import sys,json;print(json.load(sys.stdin)["auth"]["client_token"])')
+  run bash -c "printf '%s\n' '$tok' | podman run --rm -i --log-driver none --network host -v '$T/config/tls/ca.pem:/ca.pem:ro,z' -e VAULT_ADDR=https://127.0.0.1:18200 -e VAULT_CACERT=/ca.pem --entrypoint sh '$LEGO_IMAGE_REF' -c 'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN; vault kv get -field=domains secret/certs/multi'"
+  [ "$status" -ne 0 ]
+}
+
+@test "onboard-server.sh: rooli väärällä IP:llä ei kirjaudu" {
+  run onboard add e2e-wrongip 10.9.9.9 web
+  [ "$status" -eq 0 ]
+  wrapped=$(sed -n 's/^wrapped secret_id: *\([^ ]*\).*/\1/p' <<< "$output")
+  sid=$(printf '%s\n' "$wrapped" | agent_vault unwrap -field=secret_id)
+  rid=$(sed -n 's/^role_id: *//p' <<< "$output")
+  code=$(printf '{"role_id":"%s","secret_id":"%s"}' "$rid" "$sid" | curl -s --cacert "$T/config/tls/ca.pem" \
+    -o /dev/null -w '%{http_code}' --data @- https://127.0.0.1:18200/v1/auth/approle/login)
+  [ "$code" != "200" ]
+  onboard remove e2e-wrongip
+}
+
+@test "onboard-server.sh rotate + destroy-old jättää vain uusimman secret_id:n; list näyttää palvelimen" {
+  run onboard rotate e2e-srv
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"destroy-old e2e-srv"* ]]
+  run vault_root list -format=json auth/approle/role/e2e-srv/secret-id </dev/null
+  [ "$(python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' <<< "$output")" = "2" ]
+  run onboard destroy-old e2e-srv
+  [ "$status" -eq 0 ]
+  run vault_root list -format=json auth/approle/role/e2e-srv/secret-id </dev/null
+  [ "$(python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' <<< "$output")" = "1" ]
+  run onboard list
+  echo "$output"
+  [[ "$output" == *"e2e-srv"*"127.0.0.1/32"*"web"* ]]
+}
+
+@test "onboard-server.sh csv: parametritiedostot ilman salaisuuksia, Install-WindowsAgent-yhteensopivat" {
+  printf '%s\n' '# palvelin;ip;varmenne=host:port|host:port' \
+    'e2e-win1;10.1.2.31;web=web.acme.test:443' \
+    'e2e-win2;10.1.2.32;web=web.acme.test:443;multi=a.acme.test:443|b.acme.test:8443' > "$T/servers.csv"
+  run onboard csv "$T/servers.csv" --out "$T/params" --vault-exe-sha256 "$VAULT_WINDOWS_SHA256"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  run python3 -c 'import sys,json
+d=json.load(open(sys.argv[1]))
+assert d["Server"]=="e2e-win2" and d["VaultAddress"]=="https://vault.test:8200"
+assert d["Certificates"]=={"web":["web.acme.test:443"],"multi":["a.acme.test:443","b.acme.test:8443"]}, d["Certificates"]
+assert len(d["RoleId"])==36 and d["RevocationMode"]=="NoCheck"
+for k in d: assert "token" not in k.lower() and "secret" not in k.lower(), k
+print("ok")' "$T/params/e2e-win2.json"
+  echo "$output"
+  [ "$output" = "ok" ]
+  run grep -rqE 'hvs\.|s\.[A-Za-z0-9]{24}' "$T/params"
+  [ "$status" -eq 1 ]
+  run onboard csv <(printf 'huono;999.1.1.1;web=x:1\n') --out "$T/params-bad"
+  [ "$status" -ne 0 ]
+  onboard remove e2e-win1; onboard remove e2e-win2
+}
+
+@test "onboard-server.sh remove: secret_id:t hävitetty, rooli ja policy poistettu" {
+  run onboard remove e2e-srv
+  echo "$output"
+  [ "$status" -eq 0 ]
+  run vault_root read auth/approle/role/e2e-srv </dev/null
+  [ "$status" -ne 0 ]
+  run vault_root policy read cert-e2e-srv </dev/null
+  [ "$status" -ne 0 ]
 }
 
 @test "revoke-root: root-token mitätöidään, ylläpitäjä toimii edelleen" {

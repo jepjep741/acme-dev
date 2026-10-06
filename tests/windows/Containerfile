@@ -1,0 +1,9 @@
+# PowerShell-testiympäristö (Pester + PSScriptAnalyzer). Vain rakennusympäristö. [VERKKO]
+# Windows-skriptit ajetaan pwsh 7:llä Linuxissa; Windows-riippuvaiset komennot korvataan mockeilla.
+# PS 5.1 -yhteensopivuus tarkistetaan PSScriptAnalyzerin PSUseCompatible*-säännöillä.
+ARG PWSH_IMAGE=mcr.microsoft.com/powershell@sha256:663a172849444279d8e7b50e19977b6e42380eae6856bdc8931ca08e2e03e92a
+FROM ${PWSH_IMAGE}
+ARG PESTER_VERSION=5.7.1
+ARG PSSA_VERSION=1.25.0
+# Exec-muoto: OCI-imagemuoto ei tue SHELL-ohjetta
+RUN ["pwsh", "-NoProfile", "-Command", "Set-PSRepository PSGallery -InstallationPolicy Trusted; Install-Module Pester -RequiredVersion $env:PESTER_VERSION -Scope AllUsers -Force -SkipPublisherCheck; Install-Module PSScriptAnalyzer -RequiredVersion $env:PSSA_VERSION -Scope AllUsers -Force; Get-Module -ListAvailable Pester, PSScriptAnalyzer | Select-Object Name, Version | Format-Table | Out-String | Write-Host"]

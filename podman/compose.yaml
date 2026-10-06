@@ -6,9 +6,12 @@
 #   podman-compose --profile jobs run --rm lego   # ACME-uusinta (systemd: acme-renew.timer)
 #
 # Verkot:
-#   edge      internal  nginx                ei reittiä ulos
-#   vault-net internal  vault, lego          ei reittiä ulos
-#   egress    bridge    lego                 AINOA verkko, jolla on reitti ulos (DVV)
+#   edge   internal  nginx   ei reittiä ulos eikä isäntään (vain julkaistu :8080)
+#   host   isännän   vault   kuuntelee VAIN VAULT_BIND_IP:VAULT_PUBLISH_PORT. Isännän verkko, jotta
+#                            Vault näkee agenttien todellisen IP:n (AppRole-CIDR-sidonta); rootless-
+#                            portinohjaus (rootlessport) korvaisi lähdeosoitteen kontin osoitteella.
+#   host   isännän   lego    tavoittaa Vaultin (VAULT_BIND_IP) ja DVV:n. Isäntä rajaa palvelukäyttäjän
+#                            ulosmenevän liikenteen nftablesilla (install-host.sh: vain DVV + DNS).
 name: acme
 
 # Ei podia: kontit omissa verkkonimiavaruuksissaan ilman ryhmittelyä, jotta valvonta- ja
@@ -58,15 +61,29 @@ services:
     # Sinetöity Vault ei kaadu, joten on-failure ei aiheuta uudelleenkäynnistyssilmukkaa.
     restart: on-failure:3
     user: "100:1000"
-    command: ["vault", "server", "-config=/vault/config/vault.hcl"]
-    networks: [vault-net]
-    ports:
-      - "${VAULT_BIND_IP:?VAULT_BIND_IP puuttuu .env:stä}:${VAULT_PUBLISH_PORT:-8200}:8200"
+    network_mode: host
+    # Kuunteluosoite muodostetaan ympäristöstä (HCL ei tue muuttujia); muu konfiguraatio vault.hcl:ssä.
+    command:
+      - sh
+      - -ec
+      - |
+        {
+          echo 'listener "tcp" {'
+          echo "  address         = \"$$VAULT_LISTEN_ADDR\""
+          echo "  cluster_address = \"127.0.0.1:$$VAULT_CLUSTER_PORT\""
+          echo '  tls_cert_file   = "/vault/tls/vault.crt"'
+          echo '  tls_key_file    = "/run/secrets/vault_tls_key"'
+          echo '  tls_min_version = "tls12"'
+          echo '}'
+        } > /tmp/listener.hcl
+        exec vault server -config=/vault/config/vault.hcl -config=/tmp/listener.hcl
     environment:
+      VAULT_LISTEN_ADDR: ${VAULT_BIND_IP:?VAULT_BIND_IP puuttuu .env:stä}:${VAULT_PUBLISH_PORT:-8200}
+      VAULT_CLUSTER_PORT: ${VAULT_CLUSTER_PORT:-8201}
       VAULT_API_ADDR: ${VAULT_API_ADDR:?VAULT_API_ADDR puuttuu .env:stä}
-      VAULT_CLUSTER_ADDR: https://vault:8201
-      # Kontin sisäiset CLI-komennot (healthcheck, podman exec)
-      VAULT_ADDR: https://127.0.0.1:8200
+      VAULT_CLUSTER_ADDR: https://127.0.0.1:${VAULT_CLUSTER_PORT:-8201}
+      # Kontin sisäiset CLI-komennot (healthcheck, podman exec); varmenteen SAN sisältää IP:n
+      VAULT_ADDR: https://${VAULT_BIND_IP}:${VAULT_PUBLISH_PORT:-8200}
       VAULT_CACERT: /vault/tls/ca.pem
     volumes:
       - vault-data:/vault/file:Z
@@ -100,19 +117,19 @@ services:
     image: ${LEGO_IMAGE:?LEGO_IMAGE puuttuu .env:stä}
     profiles: [jobs]
     restart: "no"
-    networks: [egress, vault-net]
+    network_mode: host
     environment:
       LEGO_SERVER: ${LEGO_SERVER:?LEGO_SERVER puuttuu .env:stä}
       LEGO_EMAIL: ${LEGO_EMAIL:?LEGO_EMAIL puuttuu .env:stä}
       KEY_TYPE: ${KEY_TYPE:-RSA2048}
       RENEW_DAYS: ${RENEW_DAYS:-30}
       PFX_COMPAT: ${PFX_COMPAT:-modern}
-      VAULT_ADDR: https://vault:8200
+      VAULT_ADDR: https://${VAULT_BIND_IP}:${VAULT_PUBLISH_PORT:-8200}
       VAULT_CACERT: /etc/acme/vault-ca.pem
       LEGO_LOG_FORMAT: text
       # Välityspalvelin vain tähän konttiin; Vault ohitetaan aina.
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: vault,${NO_PROXY:-}
+      NO_PROXY: ${VAULT_BIND_IP},${NO_PROXY:-}
     volumes:
       - lego-data:/var/lib/lego:Z
       - acme-webroot:/var/www/acme:z
@@ -130,9 +147,6 @@ services:
 networks:
   edge:
     internal: true
-  vault-net:
-    internal: true
-  egress: {}
 
 volumes:
   # Omistajat vastaavat kontin käyttäjiä (lego 1000, vault 100:1000).

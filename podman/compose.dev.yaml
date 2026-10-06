@@ -5,6 +5,7 @@
 #   podman-compose --env-file <dev.env> -f compose.yaml -f compose.dev.yaml up -d
 #
 # Validointipolku: pebble -> (edge) nginx:8080, kuten tuotannossa DVV -> DNAT -> :8080.
+# lego (isännän verkko) -> Pebble julkaistun portin 127.0.0.1:14000 kautta.
 # DEV_DIR sisältää pebble-ca.pem:n (Pebblen ACME-API:n TLS-CA), jonka testit poimivat imagesta.
 services:
   lego:
@@ -22,8 +23,10 @@ services:
       PEBBLE_VA_NOSLEEP: "1"
       PEBBLE_WFE_NONCEREJECT: "0"
       PEBBLE_AUTHZREUSE: "0"
-    networks: [egress, edge]
+    # lego (isännän verkko) käyttää ACME-API:a julkaistun portin kautta: https://127.0.0.1:14000/dir
+    networks: [edge]
     ports:
+      - "127.0.0.1:14000:14000"
       - "127.0.0.1:${PEBBLE_MGMT_PORT:-15000}:15000"
     volumes:
       - ../tests/podman/pebble/pebble-config.json:/etc/pebble/pebble-config.json:ro
@@ -34,6 +37,6 @@ services:
     container_name: acme-challtestsrv
     pull_policy: never
     command: ["-defaultIPv6", "", "-http01", "", "-https01", "", "-tlsalpn01", "", "-doh", ""]
-    networks: [egress]
+    networks: [edge]
     ports:
       - "127.0.0.1:${CHALLTESTSRV_MGMT_PORT:-8055}:8055"
