@@ -1,0 +1,39 @@
+# KEHITYS JA TESTAUS (vain rakennusympäristö, EI julkaisupakettiin).
+# Pebble (ACME-testipalvelin, EAB pakollinen) + challtestsrv (DNS) DVV:n tilalle.
+# Vault on sama kuin tuotannossa (raft + TLS), mutta alustetaan testiavaimilla (tests/podman).
+#
+#   podman-compose --env-file <dev.env> -f compose.yaml -f compose.dev.yaml up -d
+#
+# Validointipolku: pebble -> (edge) nginx:8080, kuten tuotannossa DVV -> DNAT -> :8080.
+# DEV_DIR sisältää pebble-ca.pem:n (Pebblen ACME-API:n TLS-CA), jonka testit poimivat imagesta.
+services:
+  lego:
+    environment:
+      LEGO_CA_CERTIFICATES: /etc/acme/pebble-ca.pem
+    volumes:
+      - ${DEV_DIR:?DEV_DIR puuttuu}/pebble-ca.pem:/etc/acme/pebble-ca.pem:ro
+
+  pebble:
+    image: ${PEBBLE_IMAGE:?PEBBLE_IMAGE puuttuu}
+    container_name: acme-pebble
+    pull_policy: never
+    command: ["-config", "/etc/pebble/pebble-config.json", "-dnsserver", "challtestsrv:8053"]
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+      PEBBLE_WFE_NONCEREJECT: "0"
+      PEBBLE_AUTHZREUSE: "0"
+    networks: [egress, edge]
+    ports:
+      - "127.0.0.1:${PEBBLE_MGMT_PORT:-15000}:15000"
+    volumes:
+      - ../tests/podman/pebble/pebble-config.json:/etc/pebble/pebble-config.json:ro
+    depends_on: [challtestsrv]
+
+  challtestsrv:
+    image: ${CHALLTESTSRV_IMAGE:?CHALLTESTSRV_IMAGE puuttuu}
+    container_name: acme-challtestsrv
+    pull_policy: never
+    command: ["-defaultIPv6", "", "-http01", "", "-https01", "", "-tlsalpn01", "", "-doh", ""]
+    networks: [egress]
+    ports:
+      - "127.0.0.1:${CHALLTESTSRV_MGMT_PORT:-8055}:8055"

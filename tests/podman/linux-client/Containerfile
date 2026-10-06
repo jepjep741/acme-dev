@@ -1,0 +1,6 @@
+# Linux-testiasiakas: ajaa linux/install-cert.sh:n Vaultista haetulla bundlella.
+# Vain testikäyttöön (rakennusympäristö). Skripti ja konfiguraatio liitetään ajossa.
+ARG UBI_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal@sha256:eba570d04193d1523a8576b1c0ff00e681c9edb1a41d4742559b6e3ff457601e
+FROM ${UBI_IMAGE}
+# hadolint ignore=DL3041
+RUN microdnf -y --nodocs install openssl diffutils util-linux && microdnf clean all
