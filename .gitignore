@@ -1,0 +1,6 @@
+# Paikalliset asetukset ja salaisuudet: EI versionhallintaan
+podman/.env
+*.key
+**/private/
+*.pfx
+release/*/

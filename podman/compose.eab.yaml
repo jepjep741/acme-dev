@@ -1,0 +1,20 @@
+# VAIN ensimmäistä ACME-tilin rekisteröintiä varten (DVV:n EAB KID/HMAC).
+#
+#   scripts/secrets.sh eab                # kysyy KID/HMAC piilotettuna -> podman secret
+#   podman-compose --profile jobs -f compose.yaml -f compose.eab.yaml run --rm lego
+#   scripts/secrets.sh eab-remove         # tilin luonnin jälkeen
+#
+# Normaalit ajot (acme-renew.timer) käyttävät vain compose.yaml:ia, eivätkä EAB-salaisuudet
+# ole silloin olemassa.
+services:
+  lego:
+    secrets:
+      - {source: vault_token, uid: "1000", gid: "1000", mode: "0400"}
+      - {source: lego_eab_kid, uid: "1000", gid: "1000", mode: "0400"}
+      - {source: lego_eab_hmac, uid: "1000", gid: "1000", mode: "0400"}
+
+secrets:
+  lego_eab_kid:
+    external: true
+  lego_eab_hmac:
+    external: true

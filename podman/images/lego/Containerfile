@@ -1,0 +1,53 @@
+# Lego + vault CLI ACME-uusintaa varten (keskuspalvelimen ajastettu kertakontti).
+# Rakennetaan ILMARAON ULKOPUOLELLA (scripts/build-release.sh). Kaikki binäärit ladataan
+# virallisista julkaisuista kiinnitetyillä versioilla ja tarkistetaan SHA256:lla.
+#
+#   podman build -f images/lego/Containerfile \
+#     --build-arg UBI_IMAGE=... --build-arg LEGO_VERSION=... --build-arg LEGO_SHA256=... \
+#     --build-arg VAULT_VERSION=... --build-arg VAULT_SHA256=... -t localhost/acme-lego:<tag> images/lego
+#
+# Oletusarvot vastaavat tiedostoa podman/versions.env (build-release.sh välittää ne).
+
+ARG UBI_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal@sha256:eba570d04193d1523a8576b1c0ff00e681c9edb1a41d4742559b6e3ff457601e
+
+# --- Vaihe 1: binäärien lataus ja tarkistus ---------------------------------
+FROM ${UBI_IMAGE} AS fetch
+ARG LEGO_VERSION=5.5.2
+ARG LEGO_SHA256=2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef
+ARG VAULT_VERSION=2.1.1
+ARG VAULT_SHA256=8aa90f9cea46f541fc7baa3d0ec692fc06afde9a248cc1f2dcac46a567c6f56b
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# hadolint ignore=DL3041
+RUN microdnf -y --nodocs install tar gzip unzip && microdnf clean all
+WORKDIR /dl
+RUN curl -fsSLo lego.tar.gz "https://github.com/go-acme/lego/releases/download/v${LEGO_VERSION}/lego_v${LEGO_VERSION}_linux_amd64.tar.gz" \
+ && echo "${LEGO_SHA256}  lego.tar.gz" | sha256sum -c - \
+ && tar -xzf lego.tar.gz lego \
+ && curl -fsSLo vault.zip "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip" \
+ && echo "${VAULT_SHA256}  vault.zip" | sha256sum -c - \
+ && unzip -q vault.zip vault \
+ && ./lego --version && ./vault version
+
+# --- Vaihe 2: minimaalinen ajoimage ------------------------------------------
+FROM ${UBI_IMAGE}
+ARG LEGO_VERSION=5.5.2
+ARG VAULT_VERSION=2.1.1
+LABEL org.opencontainers.image.title="acme-lego" \
+      org.opencontainers.image.description="lego ${LEGO_VERSION} + vault CLI ${VAULT_VERSION} DVV ACME -uusintaan" \
+      io.acme.lego.version="${LEGO_VERSION}" \
+      io.acme.vault.version="${VAULT_VERSION}"
+# bash, coreutils-single ja findutils sisältyvät ubi-minimaliin; openssl tarvitaan PFX:ään.
+# hadolint ignore=DL3041
+RUN microdnf -y --nodocs upgrade && microdnf -y --nodocs install openssl ca-certificates \
+ && microdnf clean all && rm -rf /var/cache/yum /var/lib/dnf
+COPY --from=fetch /dl/lego /dl/vault /usr/local/bin/
+COPY --chmod=0755 acme-renew.sh lego-hook.sh /usr/local/bin/
+# Hakemistot volyymeille; omistaja 1000 (kontin ei-root-käyttäjä)
+RUN mkdir -p /var/lib/lego /var/www/acme /etc/acme \
+ && chown 1000:1000 /var/lib/lego /var/www/acme
+ENV HOME=/tmp \
+    LEGO_PATH=/var/lib/lego \
+    VAULT_CACERT=/etc/acme/vault-ca.pem
+USER 1000:1000
+WORKDIR /tmp
+ENTRYPOINT ["/usr/local/bin/acme-renew.sh"]
