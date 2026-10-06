@@ -38,6 +38,7 @@ if (( DRY_RUN )); then
   log "[dry-run] kohde $DEST: vault.snap, lego-data.tar${GPG_KEYFILE:+.gpg}, config.tar; säilytys $RETENTION_DAYS pv"
   exit 0
 fi
+acme_job_lock varmuuskopio
 umask 077
 mkdir "$TMP"; trap 'rm -rf "$TMP"' EXIT
 

@@ -87,6 +87,7 @@ restore_lego_data() {
   else
     die "lego-data.tar(.gpg) puuttuu"
   fi
+  acme_job_lock "lego-datan palautus"
   if podman ps --format '{{.Names}}' | grep -q 'lego'; then die "lego-kontti on käynnissä; odota ajon päättymistä"; fi
   confirm "Volyymi acme_lego-data korvataan."
   podman volume rm -f acme_lego-data >/dev/null 2>&1 || true

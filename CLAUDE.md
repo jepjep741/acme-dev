@@ -37,6 +37,11 @@ ulkoinen yhteys on lego → DVV. Isäntäkoneversio `keskus/` on vain viite, sit
   kiinnitetään digestillä; tuotannossa ei vedetä mitään verkosta (`pull_policy: never`).
 - Windowsilla yksityinen avain tuodaan ei-vietävänä.
 - Root-token mitätöidään alustuksen jälkeen; ylläpitäjät kirjautuvat userpass + TOTP.
+- Egress-rajaus (nftables `meta skuid`) kattaa palvelukäyttäjän uid:n JA koko subuid-alueen:
+  isännän verkossa ajettavien konttien prosessit näkyvät isännällä subuid-käyttäjinä.
+  Testaa rajaukset aina kontin uid:llä, ei pelkästään palvelukäyttäjänä.
+- Salaisuuksia tai julkaisuja ei tarkisteta paikassa, jota joku muu voi muuttaa ennen käyttöä
+  (TOCTOU): kopioi ensin omaan hakemistoon ja tarkista kopio.
 
 ## Koodikäytännöt
 - Bash: `set -euo pipefail` (paitsi tarkoitukselliset poikkeukset kommentoituna), shellcheck-puhdas,

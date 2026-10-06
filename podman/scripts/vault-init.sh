@@ -141,16 +141,21 @@ print(json.dumps(out, indent=2))' "$([[ -n "$ROOT_PGP" ]] && echo 1 || echo 0)" 
     log "Pura root-token PGP:llä (gpg --decrypt) ja syötä se:"
     read_secret root "Root-token"
   fi
-  local tf; tf=$(mktemp); chmod 600 "$tf"; trap 'rm -f "$tf"' RETURN
-  printf '%s' "$root" > "$tf"; unset root
-  VAULT_ADMIN_TOKEN_FILE="$tf" cmd_configure
+  # Root-token vain muistissa: tämän prosessin ja sen aliprosessien ympäristössä (ei levylle,
+  # ei komentoriville). Poistetaan heti mitätöinnin jälkeen.
+  export _ACME_ADMIN_TOKEN="$root"; unset root
+  trap 'unset _ACME_ADMIN_TOKEN' RETURN
+  cmd_configure
   read_plain ADMIN "Ensimmäisen ylläpitäjän tunnus (esim. etunimi.sukunimi)"
-  VAULT_ADMIN_TOKEN_FILE="$tf" cmd_admin_add
-  VAULT_ADMIN_TOKEN_FILE="$tf" "$LIB_DIR/secrets.sh" vault-token
-  VAULT_ADMIN_TOKEN_FILE="$tf" "$LIB_DIR/secrets.sh" snapshot-token
+  cmd_admin_add
+  "$LIB_DIR/secrets.sh" vault-token
+  "$LIB_DIR/secrets.sh" snapshot-token
   log "Todennetaan ylläpitäjän kirjautuminen (salasana + TOTP) ennen root-tokenin mitätöintiä:"
-  until cmd_login_test; do log "Yritä uudelleen (Ctrl+C keskeyttää; root-token jää silloin voimaan)."; done
-  VAULT_ADMIN_TOKEN_FILE="$tf" cmd_revoke_root
+  until (unset _ACME_ADMIN_TOKEN; cmd_login_test); do
+    log "Yritä uudelleen (Ctrl+C keskeyttää; root-token jää silloin voimaan: vault-init.sh revoke-root)."
+  done
+  cmd_revoke_root
+  unset _ACME_ADMIN_TOKEN
 }
 
 # ---------------------------------------------------------------------------

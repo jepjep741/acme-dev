@@ -124,6 +124,7 @@ copy_pkg() { rm -rf "$RT/t"; cp -a "$RT/pkg" "$RT/t"; }
     cp -a /media/release /var/tmp/rel
     /var/tmp/rel/podman/scripts/import-release.sh /var/tmp/rel --pubkey /media/key.asc --user acmesvc
     test -L /opt/acme/current
+    ls -A /opt/acme/releases | grep -q "^\.import" && { echo "IMPORT-JÄÄNNE"; exit 1; } || true
     install -d -m 0755 -o root -g acmesvc /etc/acme-podman
     install -d -m 0755 -o acmesvc -g acmesvc /etc/acme-podman/tls
     sed -e "s|^VAULT_BIND_IP=.*|VAULT_BIND_IP=127.0.0.1|" -e "s|^VAULT_API_ADDR=.*|VAULT_API_ADDR=https://vault.test:8200|" \
@@ -153,7 +154,7 @@ copy_pkg() { rm -rf "$RT/t"; cp -a "$RT/pkg" "$RT/t"; }
   [[ "$output" == *"nginx: ok"* ]]
   [[ "$output" == *'"initialized": false'* && "$output" == *'"sealed": true'* ]]
   [[ "$output" == *"lego version 5.5.2"* ]]
-  [[ "$output" != *"VERKKO LÖYTYI"* ]]
+  [[ "$output" != *"VERKKO LÖYTYI"* && "$output" != *"IMPORT-JÄÄNNE"* ]]
   [[ "$output" == *"nginx: ei nimipalvelua"* ]]
   [[ "$output" == *"[OK]   acme-nginx käynnissä"* && "$output" == *"[OK]   acme-vault käynnissä"* ]]
   [[ "$output" == *"[OK]   haastepolku vastaa"* && "$output" == *"[OK]   muu liikenne -> 301 https"* ]]

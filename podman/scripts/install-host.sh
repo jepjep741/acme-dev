@@ -17,7 +17,7 @@ NFT_FILE=/etc/nftables/acme-egress.nft
 ZONE=public
 SERVER_CIDRS="" VAULT_IP="" EGRESS_ALLOW="" DNS_SERVERS=""
 SKIP_PACKAGES=0 SKIP_FIREWALL=0 SKIP_EGRESS=0 SKIP_LINGER=0 LOCAL_DNAT=0 DRY_RUN=0
-SVC_UID=""
+SVC_UID="" SUBUID_RANGE=""
 
 usage() {
   cat <<'EOF'
@@ -43,7 +43,7 @@ Valinnat (install):
   --skip-firewall | --skip-egress | --skip-linger
   --dry-run                   näytä toimet tekemättä niitä
   --help
-Valinnat (print-nft): --egress-allow, --dns, --user TAI --uid N
+Valinnat (print-nft): --egress-allow, --dns, --user TAI --uid N [--subuid-range ALKU-LOPPU]
 EOF
 }
 
@@ -63,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --dns) DNS_SERVERS=$2; shift 2 ;;
     --user) SVC_USER=$2; shift 2 ;;
     --uid) SVC_UID=$2; shift 2 ;;
+    --subuid-range) SUBUID_RANGE=$2; shift 2 ;;
     --backup-dir) BACKUP_DIR=$2; shift 2 ;;
     --zone) ZONE=$2; shift 2 ;;
     --local-dnat) LOCAL_DNAT=1; shift ;;
@@ -113,16 +114,27 @@ validate_lists() {
 }
 
 # --- nftables: palvelukäyttäjän egress ------------------------------------------
-# Rootless-tilassa kaikkien konttien ulosmenevä liikenne lähtee isännältä palvelukäyttäjän
-# prosesseista (pasta, aardvark-dns), joten rajaus tehdään uid:n perusteella. Kontin tason
-# eristys (internal-verkot) on toinen kerros.
+# Rootless-tilassa konttien ulosmenevä liikenne lähtee isännältä joko palvelukäyttäjän omista
+# prosesseista (pasta, aardvark-dns: bridge-verkot) TAI isännän verkossa ajettavien konttien
+# prosesseista, joiden uid isännällä on palvelukäyttäjän subuid-alueella (esim. Vault uid 100 ->
+# 100099). Siksi rajaus kattaa sekä uid:n että koko subuid-alueen. Kontin tason eristys
+# (internal-verkot) on toinen kerros.
+
+# Palvelukäyttäjän subuid-alue muodossa ALKU-LOPPU (/etc/subuid: nimi:alku:määrä)
+subuid_range() {
+  local start count
+  IFS=: read -r _ start count < <(grep -m1 "^$1:" /etc/subuid) || return 1
+  [[ "$start" =~ ^[0-9]+$ && "$count" =~ ^[0-9]+$ ]] || return 1
+  echo "$start-$((start + count - 1))"
+}
+
 render_nft() {
-  local uid=$1 x allow=() dns=()
+  local uid=$1 range=$2 x allow=() dns=()
   split_csv "$EGRESS_ALLOW"; for x in "${_OUT[@]}"; do allow+=("${x%:*} . ${x##*:}"); done
   split_csv "$DNS_SERVERS"; for x in "${_OUT[@]}"; do dns+=("$x"); done
   cat <<EOF
 # Luotu: install-host.sh. ÄLÄ muokkaa käsin, aja install-host.sh uudelleen.
-# Palvelukäyttäjän ($SVC_USER, uid $uid) sallitut ulosmenevät yhteydet; kaikki muu hylätään.
+# Palvelukäyttäjän ($SVC_USER, uid $uid, subuid $range) sallitut ulosmenevät yhteydet; muu hylätään.
 table inet acme_egress
 delete table inet acme_egress
 table inet acme_egress {
@@ -144,7 +156,7 @@ EOF
 	# itse tuottamat paketit ilman socketia) ohittaa ketjun.
 	chain output {
 		type filter hook output priority filter; policy accept;
-		meta skuid $uid jump svc_out
+		meta skuid { $uid, $range } jump svc_out
 	}
 	chain svc_out {
 		oifname "lo" accept
@@ -257,8 +269,13 @@ ensure_egress() {
   [[ -n "$EGRESS_ALLOW" ]] || log "VAROITUS: --egress-allow on tyhjä: palvelukäyttäjä ei pääse DVV:hen ennen kuin osoitteet lisätään."
   [[ -n "$DNS_SERVERS" ]] || log "VAROITUS: --dns on tyhjä: palvelukäyttäjän nimikyselyt estetään."
   run install -d -m 0755 /etc/nftables
-  if (( DRY_RUN )); then render_nft "$uid" >&2; else
-    render_nft "$uid" > "$NFT_FILE.new"
+  local range
+  if ! range=$(subuid_range "$SVC_USER"); then
+    (( DRY_RUN )) || die "$SVC_USER:n subuid-alue puuttuu /etc/subuid:sta"
+    range='<subuid-alku>-<loppu>'
+  fi
+  if (( DRY_RUN )); then render_nft "$uid" "$range" >&2; else
+    render_nft "$uid" "$range" > "$NFT_FILE.new"
     nft -c -f "$NFT_FILE.new" || die "nftables-säännöt eivät kelpaa ($NFT_FILE.new)"
     chmod 0600 "$NFT_FILE.new"; mv -f "$NFT_FILE.new" "$NFT_FILE"
   fi
@@ -348,7 +365,11 @@ case "$CMD" in
     validate_lists
     if [[ -z "$SVC_UID" ]]; then SVC_UID=$(id -u "$SVC_USER" 2>/dev/null) || die "käyttäjää $SVC_USER ei ole; anna --uid"; fi
     [[ "$SVC_UID" =~ ^[0-9]+$ ]] || die "--uid: virheellinen"
-    render_nft "$SVC_UID" ;;
+    if [[ -z "$SUBUID_RANGE" ]]; then SUBUID_RANGE=$(subuid_range "$SVC_USER") || die "subuid-alue puuttuu; anna --subuid-range"; fi
+    if ! [[ "$SUBUID_RANGE" =~ ^([0-9]+)-([0-9]+)$ ]] || (( BASH_REMATCH[1] > BASH_REMATCH[2] )); then
+      die "--subuid-range: virheellinen"
+    fi
+    render_nft "$SVC_UID" "$SUBUID_RANGE" ;;
   check) check ;;
   *) usage >&2; exit 2 ;;
 esac

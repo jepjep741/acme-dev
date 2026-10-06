@@ -4,10 +4,11 @@
 #
 #   import-release.sh PAKETTIHAKEMISTO --pubkey julkaisuavain.asc [--user acmesvc] [--activate] [--verify-only]
 #
-#   1. GPG-allekirjoitus (SHA256SUMS.asc) luotettua julkista avainta vasten (--pubkey, toimitettu
-#      ilmarakoon ERILLÄÄN paketista)
-#   2. kaikki tiedostot SHA256SUMS:n mukaan; listaamattomat tai puuttuvat tiedostot = virhe
-#   3. kopio /opt/acme/releases/<versio> (root, vain luku), SELinux-kontekstit
+#   1. kopio root-omisteiseen väliaikaishakemistoon (tarkistus tehdään kopiosta: ei TOCTOU-ikkunaa)
+#   2. GPG-allekirjoitus (SHA256SUMS.asc) luotettua julkista avainta vasten (--pubkey, toimitettu
+#      ilmarakoon ERILLÄÄN paketista) ja kaikki tiedostot SHA256SUMS:n mukaan; listaamattomat
+#      tai puuttuvat tiedostot = virhe
+#   3. siirto /opt/acme/releases/<versio> (root, vain luku), SELinux-kontekstit
 #   4. imagejen lataus palvelukäyttäjälle (podman load) ja digestien tarkistus (IMAGES.txt)
 #   5. /opt/acme/current -> uusi versio vain ensiasennuksessa tai --activate
 # .env:iä ei muuteta: skripti tulostaa uudet image-viitteet (päivitys kontti kerrallaan).
@@ -57,26 +58,41 @@ verify_checksums() {
   log "Tarkistussummat OK ($(wc -l < "$SRC/SHA256SUMS") tiedostoa)"
 }
 
-verify_signature
-verify_checksums
-VERSION=$(tr -d '[:space:]' < "$SRC/VERSION")
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || die "VERSION virheellinen"
-(( VERIFY_ONLY )) && { log "Paketti $VERSION on kelvollinen (--verify-only)"; exit 0; }
+if (( VERIFY_ONLY )); then
+  verify_signature
+  verify_checksums
+  VERSION=$(tr -d '[:space:]' < "$SRC/VERSION")
+  log "Paketti $VERSION on kelvollinen (--verify-only). Tuonti tarkistaa kopion uudelleen."
+  exit 0
+fi
 
 [[ $EUID -eq 0 ]] || die "aja rootina (tarkistus onnistuu ilman: --verify-only)"
 id "$SVC_USER" >/dev/null 2>&1 || die "palvelukäyttäjä $SVC_USER puuttuu (install-host.sh install)"
 
-# --- 3. Kopio ---------------------------------------------------------------------
+# --- 3. Kopio ENSIN root-omisteiseen hakemistoon, tarkistus kopiosta ---------------
+# Ei TOCTOU-ikkunaa: siirtomedialla olevaa pakettia ei käytetä tarkistuksen jälkeen, joten
+# median kirjoitusoikeuden haltija ei voi vaihtaa tiedostoja tarkistuksen ja käytön välissä.
+install -d -m 0755 "$RELEASES"
+find "$RELEASES" -maxdepth 1 -name '.import.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+STAGE=$(mktemp -d "$RELEASES/.import.XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
+cp -a "$SRC/." "$STAGE/"
+chown -R root:root "$STAGE"; chmod -R u=rwX,go=rX "$STAGE"
+SRC=$STAGE
+verify_signature
+verify_checksums
+VERSION=$(tr -d '[:space:]' < "$SRC/VERSION")
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || die "VERSION virheellinen"
+
 DEST="$RELEASES/$VERSION"
 if [[ -d "$DEST" ]]; then
   (cd "$DEST" && sha256sum --quiet --strict -c SHA256SUMS) || die "$DEST on olemassa mutta eroaa: poista se ensin tietoisesti"
+  cmp -s "$DEST/SHA256SUMS" "$SRC/SHA256SUMS" || die "$DEST on eri paketti samalla versiolla: poista se ensin tietoisesti"
   log "$DEST on jo tuotu ja ehjä"
 else
-  install -d -m 0755 "$RELEASES"
-  cp -a "$SRC" "$DEST.tmp"
-  chown -R root:root "$DEST.tmp"; chmod -R u=rwX,go=rX "$DEST.tmp"
-  chmod 0755 "$DEST.tmp"/podman/scripts/*.sh "$DEST.tmp"/podman/images/lego/*.sh
-  mv "$DEST.tmp" "$DEST"
+  chmod 0755 "$STAGE" "$STAGE"/podman/scripts/*.sh "$STAGE"/podman/images/lego/*.sh
+  mv "$STAGE" "$DEST"
+  trap - EXIT
   log "Kopioitu: $DEST"
 fi
 if command -v selinuxenabled >/dev/null && selinuxenabled; then restorecon -R "$DEST" || true; fi

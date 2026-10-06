@@ -101,16 +101,31 @@ vault_login_admin() {
   printf -v "$_vla_out" '%s' "$_vla_tok"
 }
 
-# Token joko ympäristöstä VAULT_ADMIN_TOKEN_FILE (automaatio/testit, tiedosto 0600) tai kirjautumalla.
+# Token: _ACME_ADMIN_TOKEN (sisäinen: vault-init.sh välittää alustuksen root-tokenin aliprosesseille
+# muistissa, ei levylle), VAULT_ADMIN_TOKEN_FILE (automaatio/testit, tiedosto 0600) tai kirjautuminen.
 vault_admin_token() {
   local _vat_out=$1 _vat_tok
-  if [[ -n "${VAULT_ADMIN_TOKEN_FILE:-}" ]]; then
+  if [[ -n "${_ACME_ADMIN_TOKEN:-}" ]]; then
+    _vat_tok=$_ACME_ADMIN_TOKEN
+  elif [[ -n "${VAULT_ADMIN_TOKEN_FILE:-}" ]]; then
     [[ -r "$VAULT_ADMIN_TOKEN_FILE" ]] || die "VAULT_ADMIN_TOKEN_FILE ei ole luettavissa"
     _vat_tok=$(tr -d '\r\n' < "$VAULT_ADMIN_TOKEN_FILE")
   else
     vault_login_admin _vat_tok
   fi
   printf -v "$_vat_out" '%s' "$_vat_tok"
+}
+
+# Yhteinen lukitus töille, jotka käsittelevät lego-dataa (uusinta, varmuuskopio, palautus):
+# estää esim. keskeneräisen lego-datan viennin varmuuskopioon, kun ajastimet käynnistyvät
+# yhtä aikaa (Persistent=true) tai uusinta ajetaan käsin ajastetun rinnalla.
+acme_job_lock() { # acme_job_lock <kuvaus>  (lukko vapautuu prosessin päättyessä)
+  local f="${XDG_RUNTIME_DIR:-/tmp}/acme-jobs.lock"
+  exec 9>>"$f"
+  if ! flock -n 9; then
+    log "odotetaan toisen työn valmistumista ($1, lukko $f)"
+    flock -w "${ACME_LOCK_TIMEOUT:-3600}" 9 || die "lukkoa ei saatu ($f)"
+  fi
 }
 
 # Kirjoittaa stdinin podman secretiksi (korvaa olemassa olevan).

@@ -8,5 +8,6 @@ Requires=acme-stack.service
 [Service]
 Type=oneshot
 Environment=ACME_ENV=/etc/acme-podman/.env
-ExecStart=/opt/acme/current/podman/scripts/acme-compose.sh --profile jobs run --rm -T lego
+# renew.sh lukitsee yhteisen lukon (ei samanaikaista varmuuskopiota tai käsiajoa)
+ExecStart=/opt/acme/current/podman/scripts/renew.sh
 TimeoutStartSec=30min

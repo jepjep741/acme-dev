@@ -30,11 +30,13 @@ in_host() { # in_host <bash-skripti>  (kontissa rootina)
 }
 
 @test "install-host.sh hylkää virheelliset syötteet" {
-  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --egress-allow 300.1.1.1:443
+  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --subuid-range 100000-165535 --egress-allow 300.1.1.1:443
   [ "$status" -ne 0 ]; [[ "$output" == *"virheellinen osoite"* ]]
-  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --egress-allow 192.0.2.1:99999
+  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --subuid-range 100000-165535 --egress-allow 192.0.2.1:99999
   [ "$status" -ne 0 ]; [[ "$output" == *"virheellinen portti"* ]]
-  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --dns 'x;rm'
+  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --subuid-range 100000-165535 --dns 'x;rm'
+  [ "$status" -ne 0 ]
+  run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 990 --subuid-range 9-1
   [ "$status" -ne 0 ]
   run "$PODMAN_DIR/scripts/install-host.sh" print-nft --uid 'a b'
   [ "$status" -ne 0 ]
@@ -89,29 +91,42 @@ in_host() { # in_host <bash-skripti>  (kontissa rootina)
 @test "nftables-säännöt kelpaavat (nft -c), myös tyhjillä listoilla" {
   run "${HOST_RUN_NET[@]}" bash -c '
     S=/opt/acme/releases/test/podman/scripts/install-host.sh
-    $S print-nft --uid 990 --egress-allow 192.0.2.10:443,198.51.100.0/24:80 --dns 10.0.0.53 > /tmp/a.nft
-    $S print-nft --uid 990 > /tmp/b.nft
+    $S print-nft --uid 990 --subuid-range 100000-165535 --egress-allow 192.0.2.10:443,198.51.100.0/24:80 --dns 10.0.0.53 > /tmp/a.nft
+    $S print-nft --uid 990 --subuid-range 100000-165535 > /tmp/b.nft
     nft -c -f /tmp/a.nft && nft -c -f /tmp/b.nft && echo NFT-OK'
   echo "$output"
   [[ "$output" == *"NFT-OK"* ]]
 }
 
-@test "nftables rajaa vain palvelukäyttäjän: sallittu kohde vastaa, muu estetty, root ei rajattu" {
+@test "nftables rajaa palvelukäyttäjän ja sen subuid-alueen (isännän verkon kontit); root ei rajattu" {
   run "${HOST_RUN_NET[@]}" bash -c '
     useradd --system acmesvc
+    # Testikontti (itse rootless) kattaa vain 65536 uid:tä, joten subuid-alue on tässä 30000-45535;
+    # tuotannossa tyypillisesti 100000-165535. Mekanismi on sama.
+    usermod --add-subuids 30000-45535 --add-subgids 30000-45535 acmesvc
+    # Isännän verkossa ajetun kontin prosessi näkyy isännällä subuid-käyttäjänä (Vault uid 100 -> alku+99)
+    useradd -M -u 30099 kontti-vault
+    useradd -M -u 50000 alueen-ulkopuolella
     ns=$(awk "/^nameserver/{print \$2; exit}" /etc/resolv.conf)
     /opt/acme/releases/test/podman/scripts/install-host.sh print-nft --user acmesvc \
       --egress-allow 1.1.1.1:443 --dns "$ns" > /tmp/e.nft
+    grep -q "meta skuid { $(id -u acmesvc), 30000-45535 }" /tmp/e.nft && echo "skuid-alue OK"
     nft -f /tmp/e.nft
     c() { rc=0; "$@" curl -s -o /dev/null --max-time 8 "$U" || rc=$?; echo "$rc"; }
     U=https://1.1.1.1/; echo "svc-allowed=$(c runuser -u acmesvc --)"
     U=https://8.8.8.8/; echo "svc-denied=$(c runuser -u acmesvc --)"
-    U=https://8.8.8.8/; echo "root=$(c env)"
-    nft list chain inet acme_egress svc_out | grep -c "reject"'
+    U=https://1.1.1.1/; echo "subuid-allowed=$(c runuser -u kontti-vault --)"
+    U=https://8.8.8.8/; echo "subuid-denied=$(c runuser -u kontti-vault --)"
+    U=https://8.8.8.8/; echo "outside=$(c runuser -u alueen-ulkopuolella --)"
+    U=https://8.8.8.8/; echo "root=$(c env)"'
   echo "$output"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"skuid-alue OK"* ]]
   [[ "$output" == *"svc-allowed=0"* ]]
   [[ "$output" == *"svc-denied=7"* ]]
+  [[ "$output" == *"subuid-allowed=0"* ]]
+  [[ "$output" == *"subuid-denied=7"* ]]
+  [[ "$output" == *"outside=0"* ]]
   [[ "$output" == *"root=0"* ]]
 }
 

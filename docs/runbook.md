@@ -49,7 +49,7 @@ Viimeisin onnistunut ajo: healthcheck "uusinta: viimeisin onnistunut ...". Varoi
 ## R4. Pakotettu uusinta (sulkeminen, avaimen vaihto, PFX_COMPAT-muutos)
 Kaikki `certs.conf`:n varmenteet:
 ```
-acmesvc$ scripts/acme-compose.sh --profile jobs run --rm -T -e RENEW_DAYS=3650 lego
+acmesvc$ scripts/renew.sh -e RENEW_DAYS=3650
 ```
 Yksittäinen varmenne: aja sama väliaikaisella `certs.conf`:lla, jossa on vain se rivi
 (`ACME_CONF_DIR`-hakemiston kopio). Uusi versio leviää palvelimille 1,5 tunnin kuluessa;

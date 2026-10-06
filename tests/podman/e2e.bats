@@ -426,6 +426,19 @@ admin_login() { # tulostaa ylläpitäjän tokenin (vain testi)
   [ -z "$(ls "$T/diag-fail" 2>/dev/null)" ]
 }
 
+@test "renew.sh odottaa yhteistä lukkoa (ei samanaikaista uusintaa ja varmuuskopiota)" {
+  lock="${XDG_RUNTIME_DIR:-/tmp}/acme-jobs.lock"
+  flock "$lock" sleep 6 3>&- &
+  sleep 1
+  start=$(date +%s)
+  ACME_ENV="$ENV_FILE" ACME_DIR="$PODMAN_DIR" ACME_COMPOSE_FILES=compose.dev.yaml run "$PODMAN_DIR/scripts/renew.sh"
+  wait
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"odotetaan toisen työn valmistumista"* ]]
+  [ $(( $(date +%s) - start )) -ge 4 ]
+}
+
 @test "backup.sh: snapshot, salattu lego-data, config ja tarkistussummat" {
   run "$PODMAN_DIR/scripts/backup.sh"
   echo "$output"

@@ -38,6 +38,7 @@ palvelukäyttäjän uid:n perusteella; nginx on eristetyssä verkossa.
 | [docs/runbook.md](docs/runbook.md) | häiriötilanteet |
 | [docs/verkko.md](docs/verkko.md) | sallitut verkkoyhteydet ja egress-rajaus |
 | [docs/paivitys-ilmarako.md](docs/paivitys-ilmarako.md) | julkaisupaketti ja päivitys ilmaraossa |
+| [docs/tietoturvakatselmointi.md](docs/tietoturvakatselmointi.md) | katselmoinnin havainnot, korjaukset ja jäännösriskit |
 
 ### Hakemistot
 
@@ -47,7 +48,7 @@ palvelukäyttäjän uid:n perusteella; nginx on eristetyssä verkossa.
 | `podman/images/lego/` | lego + vault CLI -image (UBI9-minimal), `acme-renew.sh`, `lego-hook.sh` |
 | `podman/nginx/`, `podman/vault/` | nginx-konfiguraatio, `vault.hcl`, policyt |
 | `podman/systemd/` | käyttäjän yksiköt (stack, uusinta, snapshot, audit-kierto) ja egress-nft |
-| `podman/scripts/` | `install-host.sh`, `tls-init.sh`, `vault-init.sh`, `vault-unseal.sh`, `secrets.sh`, `onboard-server.sh`, `backup.sh`, `restore.sh`, `healthcheck.sh`, `egress-check.sh`, `acme-compose.sh` |
+| `podman/scripts/` | `install-host.sh`, `renew.sh`, `tls-init.sh`, `vault-init.sh`, `vault-unseal.sh`, `secrets.sh`, `onboard-server.sh`, `backup.sh`, `restore.sh`, `healthcheck.sh`, `egress-check.sh`, `acme-compose.sh` |
 | `windows/` | `Install-WindowsAgent.ps1`, `Remove-WindowsAgent.ps1`, `Install-Cert.ps1`, `Setup-VaultAgent.ps1` |
 | `linux/` | Vault Agent + `install-cert.sh` |
 | `tests/` | `lint.sh`, `run-bats.sh` (podman/e2e, isäntä), `windows/run.sh` (Pester, PSScriptAnalyzer) |
