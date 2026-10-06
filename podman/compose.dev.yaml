@@ -40,3 +40,8 @@ services:
     networks: [edge]
     ports:
       - "127.0.0.1:${CHALLTESTSRV_MGMT_PORT:-8055}:8055"
+
+networks:
+  edge:
+    # Pebble ratkaisee challtestsrv-nimen edge-verkossa (vain kehitys)
+    x-podman.disable_dns: false

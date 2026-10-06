@@ -170,6 +170,11 @@ host_ip() { ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p'; }
   [[ "$status" =~ ^(7|28)$ ]]
 }
 
+@test "eristys: tuotannon edge-verkossa ei ole DNS:ää (compose.yaml)" {
+  # Kehitysympäristö ottaa DNS:n käyttöön Pebbleä varten; tarkistetaan tuotannon asetus.
+  (cd "$PODMAN_DIR" && "$PC" --env-file "$ENV_FILE" -f compose.yaml config) | grep -A3 '^  edge:' | grep -q 'x-podman.disable_dns: true'
+}
+
 @test "Vault ja lego isännän verkossa; Vault kuuntelee vain annetussa IP:ssä" {
   [ "$(podman inspect acme-vault --format '{{.HostConfig.NetworkMode}}')" = host ]
   run podman inspect acme-vault --format '{{len .HostConfig.PortBindings}}'
@@ -375,6 +380,50 @@ admin_login() { # tulostaa ylläpitäjän tokenin (vain testi)
   [[ "$output" == *"uusinta: viimeisin onnistunut"* ]]
   [[ "$output" == *"varmenne web voimassa"* ]]
   [[ "$output" != *KRIITTINEN* ]]
+}
+
+@test "smoke-test.sh: kontit, Vault, haastepolku, uusinta ja not_after metadatasta" {
+  run "$PODMAN_DIR/scripts/smoke-test.sh"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"haastepolku vastaa"* ]]
+  [[ "$output" == *"muu liikenne -> 301 https"* ]]
+  [[ "$output" == *"web voimassa"*"pv)"* ]]
+  [[ "$output" == *"multi voimassa"* ]]
+  # testitiedosto siivottu webrootista
+  run podman run --rm --log-driver none -v acme_acme-webroot:/w:ro --entrypoint sh "$LEGO_IMAGE_REF" -c 'ls /w/.well-known/acme-challenge | grep -c smoke- || true'
+  [ "$output" = "0" ]
+}
+
+@test "collect-diagnostics.sh: arkisto ilman salaisuuksia" {
+  run "$PODMAN_DIR/scripts/collect-diagnostics.sh" --out "$T" --audit-lines 50
+  echo "$output"
+  [ "$status" -eq 0 ]
+  arc=$(find "$T" -maxdepth 1 -name 'acme-diag-*.tar.gz' | sort | tail -1)
+  [ "$(stat -c %a "$arc")" = "600" ]
+  mkdir -p "$T/diag"; tar -xzf "$arc" -C "$T/diag"
+  compgen -G "$T/diag/*/journal.txt" >/dev/null
+  token=$(podman run --rm --log-driver none --secret vault_token --entrypoint cat "$LEGO_IMAGE_REF" /run/secrets/vault_token)
+  for v in "$token" "$(cat "$T/root-token")" "$(cat "$T/admin-token")" "$(kv_field web pfx_password)" "$EAB_HMAC"; do
+    run grep -rlF -- "$v" "$T/diag"
+    [ "$status" -eq 1 ]
+  done
+  run grep -rlE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$T/diag"
+  [ "$status" -eq 1 ]
+}
+
+@test "collect-diagnostics.sh kieltäytyy, jos salaisuuden arvo päätyisi arkistoon" {
+  canary="kanaria-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '%s' "$canary" | podman secret create --replace diag_canary - >/dev/null
+  echo "lokiin vuotanut arvo: $canary" | systemd-cat -t acme-renew
+  sleep 2
+  mkdir -p "$T/diag-fail"
+  run "$PODMAN_DIR/scripts/collect-diagnostics.sh" --out "$T/diag-fail"
+  podman secret rm diag_canary >/dev/null
+  echo "$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"diag_canary"*"journal.txt"* ]]
+  [ -z "$(ls "$T/diag-fail" 2>/dev/null)" ]
 }
 
 @test "backup.sh: snapshot, salattu lego-data, config ja tarkistussummat" {

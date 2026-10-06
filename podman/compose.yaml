@@ -147,6 +147,8 @@ services:
 networks:
   edge:
     internal: true
+    # nginx ei tarvitse nimipalvelua: ei aardvark-dns:ää (ei DNS-vuotokanavaa, ei riippuvuutta resolv.confiin)
+    x-podman.disable_dns: true
 
 volumes:
   # Omistajat vastaavat kontin käyttäjiä (lego 1000, vault 100:1000).

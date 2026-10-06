@@ -4,3 +4,5 @@ podman/.env
 **/private/
 *.pfx
 release/*/
+release/*.tar
+release/release-signing-key-*.asc

@@ -52,4 +52,10 @@ vault kv put "secret/certs/$NAME" \
   not_after="$NOT_AFTER" \
   domains="$DOMAINS" >/dev/null
 
+# Voimassaolo myös metadataan (ISO 8601): valvonta (smoke-test.sh) lukee sen acme-writer-
+# tokenilla ilman pääsyä varmenteen avaimeen.
+NOT_AFTER_ISO="$(date -u -d "$NOT_AFTER" +%Y-%m-%dT%H:%M:%SZ)"
+vault kv metadata patch -custom-metadata=not_after="$NOT_AFTER_ISO" -custom-metadata=domains="$DOMAINS" \
+  "secret/certs/$NAME" >/dev/null
+
 log "Vaultiin päivitetty: $NAME ($DOMAINS), voimassa $NOT_AFTER asti"
