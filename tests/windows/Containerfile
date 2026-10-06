@@ -5,5 +5,7 @@ ARG PWSH_IMAGE=mcr.microsoft.com/powershell@sha256:663a172849444279d8e7b50e19977
 FROM ${PWSH_IMAGE}
 ARG PESTER_VERSION=5.7.1
 ARG PSSA_VERSION=1.25.0
-# Exec-muoto: OCI-imagemuoto ei tue SHELL-ohjetta
+# Exec-muoto: OCI-imagemuoto ei tue SHELL-ohjetta. Komento on PowerShelliä, ei sh:ta,
+# joten sh-säännöt (pipefail, lainaus) eivät koske sitä.
+# hadolint ignore=DL4006,SC2086
 RUN ["pwsh", "-NoProfile", "-Command", "Set-PSRepository PSGallery -InstallationPolicy Trusted; Install-Module Pester -RequiredVersion $env:PESTER_VERSION -Scope AllUsers -Force -SkipPublisherCheck; Install-Module PSScriptAnalyzer -RequiredVersion $env:PSSA_VERSION -Scope AllUsers -Force; Get-Module -ListAvailable Pester, PSScriptAnalyzer | Select-Object Name, Version | Format-Table | Out-String | Write-Host"]
